@@ -1,13 +1,9 @@
 import os
 import pickle
 import random
-import time
 import numpy as np
-from numpy.random import randint
 import torch
 import torch.utils.data as data
-from torch_geometric.data import Data, Batch
-from torch_geometric.utils import subgraph
 from MIND_corpus import MIND_Corpus
 
 from config import Config
@@ -158,13 +154,8 @@ class MIND_Train_Dataset(BaseMINDDataset):
         cand_ent_emb = self.linked_entity_emb[sample_idx]
         cand_ent_mask = self.linked_entity_mask[sample_idx]
 
-        history_graphs, history_seed_masks = zip(*[self.news_subgraph[i] for i in history_idx.tolist()])
-        history_graphs = list(history_graphs)
-        history_seed_masks = list(history_seed_masks)
-
-        cand_graphs, cand_seed_masks = zip(*[self.news_subgraph[i] for i in sample_idx.tolist()])
-        cand_graphs = list(cand_graphs)
-        cand_seed_masks = list(cand_seed_masks)
+        history_graphs, history_seed_masks = zip(*map(self.news_subgraph.__getitem__, history_idx.tolist()))
+        cand_graphs, cand_seed_masks = zip(*map(self.news_subgraph.__getitem__, sample_idx.tolist()))
 
         return (
             behavior[0],  # user ID
@@ -212,12 +203,9 @@ class MIND_DevTest_Dataset(BaseMINDDataset):
         cand_ent_emb = self.linked_entity_emb[cand_news_idx]
         cand_ent_mask = self.linked_entity_mask[cand_news_idx]
 
-        history_graphs, history_seed_masks = zip(*[self.news_subgraph[i] for i in history_idx.tolist()])
-        history_graphs = list(history_graphs)
-        history_seed_masks = list(history_seed_masks)
-
+        history_graphs, history_seed_masks = zip(*map(self.news_subgraph.__getitem__, history_idx.tolist()))
         sub_data, seed_mask = self.news_subgraph[cand_news_idx.item()]
-        cand_graphs    = [sub_data]
+        cand_graphs = [sub_data]
         cand_seed_masks = [seed_mask]
 
         return (

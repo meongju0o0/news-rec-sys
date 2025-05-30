@@ -29,6 +29,20 @@ def load_wikikg_map():
     return ent2idx, idx2ent
 
 
+def load_wikikg_rel_map():
+    df = pd.read_csv(
+        '../dataset/wikikg90mv2_mapping/relation.csv',
+        usecols=['idx', 'relation'],
+        dtype={'idx': int, 'relation': str},
+        encoding='utf-8',
+        engine='c',
+        quoting=csv.QUOTE_MINIMAL,
+    )
+    rel2idx = dict(zip(df['relation'], df['idx']))
+    idx2rel = dict(zip(df['idx'], df['relation']))
+    return rel2idx, idx2rel
+
+
 def load_linked_entity_map():
     with open('../graph/link_entity_dic.pkl', 'rb') as f:
         link_entity_dic = pickle.load(f)
@@ -77,10 +91,27 @@ def parse_entity_emb_vec(entity_emb_path):
     return entity_feat
 
 
+def parse_rel_emb_vec(relation_emb_path):
+    relation_feat = {}
+    with open(relation_emb_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if len(line.strip()) > 0:
+                terms = line.strip().split('\t')
+                assert len(terms) == 101, 'relation embedding dim does not match'
+                relation_id = terms[0]
+                if relation_id not in relation_feat:
+                    relation_feat[relation_id] = np.array(terms[1:], dtype=np.float32)
+    return relation_feat
+
+
 def generate_induced_subgraph(
     wikikg: WikiKG90Mv2Dataset,
     wikidata_ids: list[str],
+    entity_feat: dict[str, np.ndarray],
+    relation_feat: dict[str, np.ndarray],
+    idx2ent: dict[int, str],
     ent2idx: dict[str, int],
+    idx2rel: dict[int, str]
 ) -> Data:
     # 뉴스 엔티티 → seed_nodes
     idxs = np.fromiter((ent2idx[q] for q in wikidata_ids if q in ent2idx),
@@ -113,10 +144,51 @@ def generate_induced_subgraph(
     heads_loc = np.searchsorted(all_nodes, heads)
     tails_loc = np.searchsorted(all_nodes, tails)
 
-    # numpy 객체 tensor 변환
-    x_sub = torch.from_numpy(wikikg.entity_feat[all_nodes].astype(np.float32))
+    # 노드 피처: MIND 임베딩으로 대체
+    # missing_nodes = 0
+    # node_features = [None for _ in range(all_nodes.size)]
+    # for i, nid in enumerate(all_nodes):
+    #     qid = idx2ent[nid]
+    #     emb = entity_feat.get(qid, None)
+    #     if emb is None:
+    #         emb = np.zeros((100,), dtype=np.float32)
+    #         missing_nodes += 1
+    #     node_features[i] = emb
+    # x_sub = torch.from_numpy(np.stack(node_features, axis=0))
+    default_emb = np.zeros((100,), dtype=np.float32)
+    qids = [idx2ent[nid] for nid in all_nodes]
+    node_feats = np.stack(
+        [entity_feat.get(qid, default_emb) for qid in qids],
+        axis=0
+    )
+    missing_nodes = int(np.sum(np.all(node_feats == 0, axis=1)))
+    x_sub = torch.from_numpy(node_feats).float()
+
+    # 엣지 피처: MIND 임베딩으로 대체
+    # missing_edges = 0
+    # rel_ids = sub_triples[:, 1]
+    # edge_features = [None for _ in range(len(rel_ids))]
+    # for i, rid in enumerate(rel_ids):
+    #     rel_str = idx2rel[rid]
+    #     emb = relation_feat.get(rel_str, None)
+    #     if emb is None:
+    #         emb = np.zeros((100,), dtype=np.float32)
+    #         missing_edges += 1
+    #     edge_features[i] = emb
+    # ea_sub = torch.from_numpy(np.stack(edge_features, axis=0))
+    rel_strs = [idx2rel[rid] for rid in sub_triples[:, 1]]
+    edge_feats = np.stack(
+        [relation_feat.get(rel_str, default_emb) for rel_str in rel_strs],
+        axis=0
+    )
+    missing_edges = int(np.sum(np.all(edge_feats == 0, axis=1)))
+    ea_sub = torch.from_numpy(edge_feats).float()
+
+    print(f"Total nodes: {all_nodes.size}, Total edges: {len(original_edge_idx)}")
+    print(f"Missing nodes: {missing_nodes}, Missing edges: {missing_edges}")
+
+    # 엣지 인덱스
     ei_sub = torch.from_numpy(np.vstack((heads_loc, tails_loc)))
-    ea_sub = torch.from_numpy(wikikg.relation_feat[sub_triples[:, 1]].astype(np.float32))
 
     # Data 객체 생성
     data = Data(
@@ -226,15 +298,15 @@ def retrieval_via_pcst(graph, q_emb, root, topk=3, topk_e=3, cost_e=0.5, pruning
 
 
 def generate_pcst_subgraphs(
-    wikikg: WikiKG90Mv2Dataset,
     induced_subg: Data,
-    entity_feat: dict[str, np.ndarray],
+    entity_feats: dict[str, np.ndarray],
     wikidata_ids: list[str],
     ent2idx: dict[str,int],
     idx2ent: dict[int,str],
     global2local: dict[int,int],
 ) -> dict[str, Data]:
     results = {}
+    
     for wid in tqdm(wikidata_ids):
         if wid in results:
             continue
@@ -245,26 +317,28 @@ def generate_pcst_subgraphs(
 
         # PCST 파라미터 설정
         topk, topk_e, cost_e, pruning = 3, 3, 0.5, 'gw'
-        q_emb = torch.from_numpy(np.array(wikikg.entity_feat[idx]))
-        root = global2local.get(idx)
-        if root is None:
+        entity_feat = entity_feats.get(wid, None)
+        if entity_feat is not None:
+            q_emb = torch.from_numpy(np.array(entity_feats[wid], dtype=np.float32))
+            root = global2local.get(idx)
+            if root is None:
+                results[wid] = None
+                continue
+
+            # PCST 서브그래프 생성
+            pcst_subg = retrieval_via_pcst(induced_subg, q_emb, root, topk, topk_e, cost_e, pruning)
+
+            # 딕셔너리에 캐싱
+            for nid in pcst_subg.global_node_idx:
+                wid = idx2ent.get(nid)
+                if wid is None:
+                    continue
+                if wid not in results:
+                    results[wid] = pcst_subg
+                results[wid] = pcst_subg
+        else:
             results[wid] = None
-            continue
-
-        # PCST 서브그래프 생성
-        pcst_subg = retrieval_via_pcst(induced_subg, q_emb, root, topk, topk_e, cost_e, pruning)
-        
-        new_x = []
-        for nid in pcst_subg.global_node_idx.tolist():
-            qid = idx2ent.get(nid, None)
-            emb = entity_feat.get(qid, None)
-            if emb is None:
-                emb = np.zeros((100,), dtype=np.float32)
-            new_x.append(torch.from_numpy(emb))
-
-        pcst_subg.x = torch.stack(new_x, dim=0)  # shape: [num_nodes, feat_dim]
-        results[wid] = pcst_subg
-
+            
     return results
 
 
@@ -400,16 +474,15 @@ def generate_news_subgraphs(
         # create seed mask
         local_idx_map = {g: i for i, g in enumerate(subset.tolist())}
         seed_mask = torch.zeros(subset.size(0), dtype=torch.bool)
-        for qid in qids:
-            subg = entity_subg_dict.get(qid)
-            if subg is not None:
-                for g_id in subg.global_node_idx.tolist():
-                    if g_id in local_idx_map:
-                        seed_mask[local_idx_map[g_id]] = True
+        entity_ids = set(subg.global_node_idx.tolist())
+        valid_ids = entity_ids & local_idx_map.keys()
+        for g_id in valid_ids:
+            seed_mask[local_idx_map[g_id]] = True
 
         news_subgraph[news_idx] = (sub_data, seed_mask)
 
     return news_subgraph
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -420,9 +493,11 @@ if __name__ == '__main__':
     print(f"Loading MIND-{args.dataset} & WikiKG90Mv2 dataset...")
     wikikg              = WikiKG90Mv2Dataset(root='../dataset')
     ent2idx, idx2ent    = load_wikikg_map()
+    rel2idx, idx2rel    = load_wikikg_rel_map()
     wikidata_ids        = parse_entities_from_tsv(f'../dataset/mind_{args.dataset}_merged/news.tsv')
     linked_entities     = load_linked_entity_map()
     entity_embeddings   = parse_entity_emb_vec(f'../dataset/mind_{args.dataset}_merged/entity_embedding.vec')
+    rel_embeddings      = parse_rel_emb_vec(f'../dataset/mind_{args.dataset}_merged/relation_embedding.vec')
 
     if os.path.exists(f'entity_mapping-{args.dataset}.pkl') and os.path.exists(f'induced_subgraph-{args.dataset}.pt'):
         print(f"induced_subgraph-{args.dataset}.pt already exists, loading...")
@@ -433,7 +508,7 @@ if __name__ == '__main__':
         induced_subg = torch.load(f'induced_subgraph-{args.dataset}.pt')
     else:
         print("Generating induced subgraph...")
-        induced_subg = generate_induced_subgraph(wikikg, wikidata_ids, ent2idx)
+        induced_subg = generate_induced_subgraph(wikikg, wikidata_ids, entity_embeddings, rel_embeddings, idx2ent, ent2idx, idx2rel)
 
         global_idx = induced_subg.global_node_idx.tolist()
         local2global = {local: global_ for local, global_ in enumerate(global_idx)}
@@ -460,6 +535,7 @@ if __name__ == '__main__':
     print(f" - Found in induced_subgraph: {len(included)} ({len(included)/len(ent_ids)*100:.2f}%)")
     print(f" - Missing from induced_subgraph: {len(missing)} ({len(missing)/len(ent_ids)*100:.2f}%)")
 
+    # Generate PCST subgraphs
     output_path = f"entity_pcst_subgraph-{args.dataset}.pkl"
     if os.path.exists(output_path):
         print(f"PCST subgraph dict already exists at entity_pcst_subgraph-{args.dataset}.pkl, loading...")
@@ -468,15 +544,14 @@ if __name__ == '__main__':
     else:
         # 각 QID별 PCST subgraph 생성
         print("Generating PCST subgraphs...")
-        pcst_dict = generate_pcst_subgraphs(
-            wikikg, induced_subg, entity_embeddings,
-            wikidata_ids, ent2idx, idx2ent, global2local
-        )
+        pcst_dict = generate_pcst_subgraphs(induced_subg, entity_embeddings, wikidata_ids, ent2idx, idx2ent, global2local)
         output_path = f"entity_pcst_subgraph-{args.dataset}.pkl"
         with open(output_path, 'wb') as f:
             pickle.dump(pcst_dict, f)
         print(f"PCST subgraph dict saved to {output_path}")
-    
+    print(f"Total entities: {len(wikidata_ids)}, Subgraphs generated: {sum(v is not None for v in results.values())}")
+
+    # Sample 2-hop subgraphs
     output_path = f"entity_2hop_subgraph-{args.dataset}.pkl"
     if os.path.exists(output_path):
         print(f"2-hop subgraph dict already exists at {output_path}, loading...")
@@ -491,6 +566,7 @@ if __name__ == '__main__':
             pickle.dump(sampled_subg_dict, f)
         print(f"2-hop subgraph dict saved to {output_path}")
     
+    # Generate news subgraphs
     output_path = f"news_subgraph-{args.dataset}.pkl"
     if os.path.exists(output_path):
         print(f"News subgraph dict already exists at {output_path}, loading...")
@@ -504,6 +580,9 @@ if __name__ == '__main__':
         with open(output_path, 'wb') as f:
             pickle.dump(news_subgraphs, f)
         print(f"News subgraph dict saved to {output_path}")
+    
+    dummy_count = sum(1 for g, _ in news_subgraphs.values() if g.num_nodes == 1 and g.edge_index.numel() == 0)
+    print(f"Dummy news subgraphs: {dummy_count}/{len(news_subgraphs)}")
 
     # Print summary for first 20 entity subgraphs
     print(f"Total news subgraphs: {len(news_subgraphs)}")

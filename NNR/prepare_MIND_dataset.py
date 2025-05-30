@@ -125,6 +125,13 @@ def generate_knowledge_entity_embedding(data_mode):
             shutil.copy(src_file, target_file)
         else:
             print(f"[{mode}] Warning: 소스 파일 {src_file}이 존재하지 않습니다.")
+        
+        src_file = os.path.join(src_dir, 'relation_embedding.vec')
+        target_file = os.path.join(target_dir, 'relation_embedding.vec')
+        if os.path.exists(src_file):
+            shutil.copy(src_file, target_file)
+        else:
+            print(f"[{mode}] Warning: 소스 파일 {src_file}이 존재하지 않습니다.")
 
 
 def prepare_MIND_large():
@@ -225,7 +232,7 @@ def prepare_merged_dataset(data_mode):
     print(f">> Merged folder 생성: {merged_dir}")
     
     # 합칠 파일 목록: news.tsv, entity_embedding.vec
-    filenames = ["news.tsv", "entity_embedding.vec"]
+    filenames = ["news.tsv", "entity_embedding.vec", "relation_embedding.vec"]
     
     for fname in filenames:
         file_list = [os.path.join(src, fname) for src in source_dirs]

@@ -80,41 +80,24 @@ class Trainer:
         return loss
     
     def collate_fn(self, batch):
-        # 1) plain tensor 부분 모으기
         samples = [b[:-4] for b in batch]
         collated = default_collate(samples)
 
-        # 2) 그래프와 마스크 부분 따로 모으기
-        hist_lists       = [b[-4] for b in batch]   # list of list of Data
-        hist_masks_lists = [b[-3] for b in batch]   # list of list of Tensor
-        cand_lists       = [b[-2] for b in batch]
-        cand_masks_lists = [b[-1] for b in batch]
+        hist_lists, hist_masks_lists, cand_lists, cand_masks_lists = zip(*[b[-4:] for b in batch])
 
-        # 3) 한 번 더 flatten
-        flat_hists      = list(chain.from_iterable(hist_lists))
-        flat_hist_masks = list(chain.from_iterable(hist_masks_lists))
-        flat_cands      = list(chain.from_iterable(cand_lists))
-        flat_cand_masks = list(chain.from_iterable(cand_masks_lists))
+        flat_hists = [g for graphs in hist_lists for g in graphs]
+        flat_hist_masks = [m.view(-1) if isinstance(m, torch.Tensor) else torch.as_tensor(m, dtype=torch.bool).view(-1)
+                           for masks in hist_masks_lists for m in masks]
 
-        # 4) PyG Batch 생성
+        flat_cands = [g for graphs in cand_lists for g in graphs]
+        flat_cand_masks = [m.view(-1) if isinstance(m, torch.Tensor) else torch.as_tensor(m, dtype=torch.bool).view(-1)
+                           for masks in cand_masks_lists for m in masks]
+
         hist_batch = Batch.from_data_list(flat_hists)
         cand_batch = Batch.from_data_list(flat_cands)
 
-        # 5) mask를 1D bool Tensor로 강제 변환
-        hist_mask_tensors = [
-            m.view(-1) if isinstance(m, torch.Tensor)
-            else torch.as_tensor(m, dtype=torch.bool).view(-1)
-            for m in flat_hist_masks
-        ]
-        cand_mask_tensors = [
-            m.view(-1) if isinstance(m, torch.Tensor)
-            else torch.as_tensor(m, dtype=torch.bool).view(-1)
-            for m in flat_cand_masks
-        ]
-
-        # 6) concat
-        hist_seed_mask = torch.cat(hist_mask_tensors, dim=0)
-        cand_seed_mask = torch.cat(cand_mask_tensors, dim=0)
+        hist_seed_mask = torch.cat(flat_hist_masks, dim=0)
+        cand_seed_mask = torch.cat(flat_cand_masks, dim=0)
 
         return (*collated, hist_batch, hist_seed_mask, cand_batch, cand_seed_mask)
 

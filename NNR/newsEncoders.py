@@ -89,10 +89,10 @@ class MHSA(NewsEncoder):
         self.denseHead3 = nn.Linear(config.pretrain_rep_d,  config.entity_embedding_dim, bias=True)
 
         self.gat_num_heads = 1
-        self.gat_in_channels = config.graph_entity_embedding_dim  # 768
-        self.gat_hidden_channels = config.graph_entity_hidden_dim  # 384
-        self.gat_out_channels = config.graph_entity_hidden_dim  # 384
-        self.mlp_out_dim = 384  # GAT 후에 하나 더 거칠 MLP: graph_entity_hidden_dim → 384
+        self.gat_in_channels = config.graph_entity_embedding_dim  # 100
+        self.gat_hidden_channels = config.graph_entity_hidden_dim  # 100
+        self.gat_out_channels = config.graph_entity_hidden_dim  # 100
+        self.mlp_out_dim = 100  # GAT 후에 하나 더 거칠 MLP: graph_entity_hidden_dim → 100
         # KG embedding via GAT
         self.gat = GAT(
             in_channels=self.gat_in_channels,
@@ -102,7 +102,7 @@ class MHSA(NewsEncoder):
             dropout=0.5,
             num_heads=self.gat_num_heads
         )
-        # GAT 후에 하나 더 거칠 MLP: graph_entity_hidden_dim → 384
+        # GAT 후에 하나 더 거칠 MLP: graph_entity_hidden_dim → 100
         self.gat_mlp = nn.Sequential(
             nn.Linear(self.gat_out_channels * self.gat_num_heads, self.mlp_out_dim, bias=True),
             nn.ReLU(inplace=True),
@@ -190,13 +190,32 @@ class MHSA(NewsEncoder):
         masked_node_emb = node_emb[news_subgraph_entity_mask]
         masked_batch_idx = batch_idx[news_subgraph_entity_mask]
 
-        # seed node 기준으로 mean pooling
+        batch_news_num = title_text.size(0) * title_text.size(1)
+        feature_dim = node_emb.size(1)
+
         if masked_node_emb.size(0) > 0:
-            pooled = global_mean_pool(masked_node_emb, masked_batch_idx)  # [B*N, hidden_dim]
+            # 1. 노드별 mean pooling (정규화 전 raw sum)
+            pooled_sum = torch.zeros(batch_news_num, feature_dim, dtype=node_emb.dtype, device=node_emb.device)
+            pooled_count = torch.zeros(batch_news_num, 1, dtype=node_emb.dtype, device=node_emb.device)
+
+            # sum
+            pooled_sum.scatter_add_(
+                0,
+                masked_batch_idx.unsqueeze(1).expand(-1, feature_dim),
+                masked_node_emb
+            )
+            # count
+            ones = torch.ones(masked_node_emb.size(0), 1, dtype=node_emb.dtype, device=node_emb.device)
+            pooled_count.scatter_add_(
+                0,
+                masked_batch_idx.unsqueeze(1),
+                ones
+            )
+            # mean
+            pooled = pooled_sum / (pooled_count + 1e-6)  # avoid division by zero
         else:
-            # 모든 마스크가 False일 경우 fallback (dummy graph)
-            pooled = torch.zeros((batch_news_num, node_emb.size(1)), dtype=node_emb.dtype, device=node_emb.device)
-        
+            pooled = torch.zeros((batch_news_num, feature_dim), dtype=node_emb.dtype, device=node_emb.device)
+
         gat_rep = self.gat_mlp(pooled)  # [B*N, 384]
         gat_rep = gat_rep.view(batch_size, news_num, -1) # [B, N, 384]
 
