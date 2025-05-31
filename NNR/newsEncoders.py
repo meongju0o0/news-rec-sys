@@ -50,16 +50,10 @@ class NewsEncoder(nn.Module):
     # Output
     # news_representation : [batch_size, news_num, news_embedding_dim]
     def feature_fusion(self, news_representation, category, subCategory, pretrain_emb, batch_linked_entity_emb_sum, gat_rep):
-        # if pretrain_emb:
         category_representation = self.category_embedding(category)                                                                                    # [batch_size, news_num, category_embedding_dim]
         subCategory_representation = self.subCategory_embedding(subCategory)                                                                     # [batch_size, news_num, subCategory_embedding_dim]
         news_representation = torch.cat([news_representation, self.dropout(category_representation), self.dropout(subCategory_representation), pretrain_emb, batch_linked_entity_emb_sum, gat_rep], dim=2) # [batch_size, news_num, news_embedding_dim]
         return news_representation
-        # else:
-        #     category_representation = self.category_embedding(category)                                                                                    # [batch_size, news_num, category_embedding_dim]
-        #     subCategory_representation = self.subCategory_embedding(subCategory)                                                                     # [batch_size, news_num, subCategory_embedding_dim]
-        #     news_representation = torch.cat([news_representation, self.dropout(category_representation), self.dropout(subCategory_representation), batch_linked_entity_emb_sum], dim=2) # [batch_size, news_num, news_embedding_dim]
-        #     return news_representation
 
 
 class MHSA(NewsEncoder):
@@ -71,42 +65,47 @@ class MHSA(NewsEncoder):
         self.attention = Attention(config.head_num*config.head_dim, config.attention_dim)
         self.entity_attention = QAttention(config.entity_embedding_dim*3, config.entity_attention_dim)
         self.news_embedding_dim = config.head_num * config.head_dim + config.category_embedding_dim + config.subCategory_embedding_dim + config.pretrain_rep_d + config.entity_hidden_dim
-        # self.news_embedding_dim = config.head_num * config.head_dim + config.category_embedding_dim + config.subCategory_embedding_dim  + config.entity_hidden_dim
-        # 得到大模型emb后进行操作
+        # pretrain representation
         self.dense1 = nn.Linear(config.pretrain_emb_d, config.pretrain_hidden_dim, bias=True)
         self.dense2 = nn.Linear(config.pretrain_hidden_dim, config.pretrain_rep_d, bias=True)
-        # 查询到entity向量后进行操作
+        # entity attention
         self.dense3 = nn.Linear(config.entity_embedding_dim*config.entity_att_head_num, config.entity_hidden_dim*2, bias=True)
-        self.dense4 = nn.Linear(config.entity_hidden_dim*2,  config.entity_hidden_dim, bias=True)
+        self.dense4 = nn.Linear(config.entity_hidden_dim*2, config.entity_hidden_dim, bias=True)
 
-        # 得到大模型emb后进行Q pre操作
+        # pretrain query head
         self.denseQ_pre1 = nn.Linear(config.pretrain_emb_d, config.pretrain_hidden_dim, bias=True)
         self.denseQ_pre2 = nn.Linear(config.pretrain_hidden_dim, config.pretrain_rep_d, bias=True)
 
-        # KG多头注意力
-        self.denseHead1 = nn.Linear(config.pretrain_rep_d,  config.entity_embedding_dim, bias=True)
-        self.denseHead2 = nn.Linear(config.pretrain_rep_d,  config.entity_embedding_dim, bias=True)
-        self.denseHead3 = nn.Linear(config.pretrain_rep_d,  config.entity_embedding_dim, bias=True)
+        # entity query head
+        self.denseHead1 = nn.Linear(config.pretrain_rep_d, config.entity_embedding_dim, bias=True)
+        self.denseHead2 = nn.Linear(config.pretrain_rep_d, config.entity_embedding_dim, bias=True)
+        self.denseHead3 = nn.Linear(config.pretrain_rep_d, config.entity_embedding_dim, bias=True)
 
-        self.gat_num_heads = 1
-        self.gat_in_channels = config.graph_entity_embedding_dim  # 100
-        self.gat_hidden_channels = config.graph_entity_hidden_dim  # 100
-        self.gat_out_channels = config.graph_entity_hidden_dim  # 100
-        self.mlp_out_dim = 100  # GAT 후에 하나 더 거칠 MLP: graph_entity_hidden_dim → 100
+        self.gat_num_layers = 2
+        self.gat_num_heads = config.gat_head_num  # 2
+        self.gat_dropout = config.gat_dropout  # 0.2
+
+        self.gat_in_channels = config.gat_in_dim  # 100
+        self.gat_hidden_channels = config.gat_hidden_dim  # 100
+        self.gat_out_channels = config.gat_out_dim  # 100
+        
+        self.mlp_in_dim = self.gat_out_channels # 100
+        self.mlp_out_dim = config.gat_mlp_out_dim  # 100
+        self.mlp_dropout = config.gat_mlp_dropout  # 0.2
         # KG embedding via GAT
         self.gat = GAT(
             in_channels=self.gat_in_channels,
             hidden_channels=self.gat_hidden_channels,
             out_channels=self.gat_out_channels,
-            num_layers=2,
-            dropout=0.5,
+            num_layers=self.gat_num_layers,
+            dropout=self.gat_dropout,
             num_heads=self.gat_num_heads
         )
-        # GAT 후에 하나 더 거칠 MLP: graph_entity_hidden_dim → 100
+        # GAT 후에 하나 더 거칠 MLP
         self.gat_mlp = nn.Sequential(
-            nn.Linear(self.gat_out_channels * self.gat_num_heads, self.mlp_out_dim, bias=True),
+            nn.Linear(self.gat_out_channels, self.mlp_out_dim, bias=True),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5)
+            nn.Dropout(p=self.mlp_dropout)
         )
         self.news_embedding_dim += self.mlp_out_dim
     
@@ -216,10 +215,9 @@ class MHSA(NewsEncoder):
         else:
             pooled = torch.zeros((batch_news_num, feature_dim), dtype=node_emb.dtype, device=node_emb.device)
 
-        gat_rep = self.gat_mlp(pooled)  # [B*N, 384]
-        gat_rep = gat_rep.view(batch_size, news_num, -1) # [B, N, 384]
+        gat_rep = self.gat_mlp(pooled)
+        gat_rep = gat_rep.view(batch_size, news_num, -1)
 
-        # 7. feature fusion (gat_rep 포함)
         news_representation = self.feature_fusion(
             news_representation,
             category,

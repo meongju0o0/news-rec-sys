@@ -32,7 +32,7 @@ class BaseMINDDataset(data.Dataset):
         self.pretrain_emb_d = corpus.pretrain_emb_d
         self.max_linked_entity_length = config.max_linked_entity_length
         self.entity_embedding_dim = config.entity_embedding_dim
-        self.graph_entity_dim = config.graph_entity_embedding_dim
+        self.graph_entity_dim = config.gat_in_dim
 
         # share history graphs and behaviors
         if mode == 'train':

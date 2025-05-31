@@ -4,9 +4,12 @@ import pickle
 import json
 import csv
 
+import torch
+
 import pandas as pd
 import numpy as np
-import torch
+
+from collections import defaultdict
 from torch_geometric.data import Data
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.utils import subgraph
@@ -136,6 +139,7 @@ def generate_induced_subgraph(
 
     # 등장한 노드 집합
     heads = sub_triples[:, 0]
+    rels = sub_triples[:, 1]
     tails = sub_triples[:, 2]
     all_nodes = np.unique(np.concatenate((heads, tails, seed_nodes)))
     print(f"Total unique nodes in subgraph: {all_nodes.size}")
@@ -144,17 +148,7 @@ def generate_induced_subgraph(
     heads_loc = np.searchsorted(all_nodes, heads)
     tails_loc = np.searchsorted(all_nodes, tails)
 
-    # 노드 피처: MIND 임베딩으로 대체
-    # missing_nodes = 0
-    # node_features = [None for _ in range(all_nodes.size)]
-    # for i, nid in enumerate(all_nodes):
-    #     qid = idx2ent[nid]
-    #     emb = entity_feat.get(qid, None)
-    #     if emb is None:
-    #         emb = np.zeros((100,), dtype=np.float32)
-    #         missing_nodes += 1
-    #     node_features[i] = emb
-    # x_sub = torch.from_numpy(np.stack(node_features, axis=0))
+    # 노드 피처: MIND 임베딩으로 대체 (default: 0, missing은 이후 보정)
     default_emb = np.zeros((100,), dtype=np.float32)
     qids = [idx2ent[nid] for nid in all_nodes]
     node_feats = np.stack(
@@ -164,19 +158,8 @@ def generate_induced_subgraph(
     missing_nodes = int(np.sum(np.all(node_feats == 0, axis=1)))
     x_sub = torch.from_numpy(node_feats).float()
 
-    # 엣지 피처: MIND 임베딩으로 대체
-    # missing_edges = 0
-    # rel_ids = sub_triples[:, 1]
-    # edge_features = [None for _ in range(len(rel_ids))]
-    # for i, rid in enumerate(rel_ids):
-    #     rel_str = idx2rel[rid]
-    #     emb = relation_feat.get(rel_str, None)
-    #     if emb is None:
-    #         emb = np.zeros((100,), dtype=np.float32)
-    #         missing_edges += 1
-    #     edge_features[i] = emb
-    # ea_sub = torch.from_numpy(np.stack(edge_features, axis=0))
-    rel_strs = [idx2rel[rid] for rid in sub_triples[:, 1]]
+    # 엣지 피처: MIND 임베딩으로 대체 (default: 0, missing은 이후 보정)
+    rel_strs = [idx2rel[rid] for rid in rels]
     edge_feats = np.stack(
         [relation_feat.get(rel_str, default_emb) for rel_str in rel_strs],
         axis=0
@@ -186,6 +169,36 @@ def generate_induced_subgraph(
 
     print(f"Total nodes: {all_nodes.size}, Total edges: {len(original_edge_idx)}")
     print(f"Missing nodes: {missing_nodes}, Missing edges: {missing_edges}")
+
+    # Missing node embedding 보정: 1-hop 이웃 평균
+    neighbors = defaultdict(list)
+    for h_l, t_l in zip(heads_loc, tails_loc):
+        neighbors[h_l].append(t_l)
+        neighbors[t_l].append(h_l)
+
+    missing_nodes = 0
+    for i in range(x_sub.shape[0]):
+        if torch.all(x_sub[i] == 0):
+            neighs = neighbors[i]
+            valid_neighs = [x_sub[j] for j in neighs if not torch.all(x_sub[j] == 0)]
+            if valid_neighs:
+                x_sub[i] = torch.stack(valid_neighs).mean(dim=0)
+            else:
+                missing_nodes += 1
+
+    # Missing edge embedding 보정: 연결된 노드 평균
+    missing_edges = 0
+    for i in range(ea_sub.shape[0]):
+        if torch.all(ea_sub[i] == 0):
+            h_l = heads_loc[i]
+            t_l = tails_loc[i]
+            ea_sub[i] = (x_sub[h_l] + x_sub[t_l]) / 2
+            if torch.all(ea_sub[i] == 0):  # 여전히 0이면 missing
+                missing_edges += 1
+
+    print(f"Total nodes: {all_nodes.size}, Total edges: {len(original_edge_idx)}")
+    print(f"Remaining missing nodes (no neighbor info): {missing_nodes}")
+    print(f"Remaining missing edges (nodes also missing): {missing_edges}")
 
     # 엣지 인덱스
     ei_sub = torch.from_numpy(np.vstack((heads_loc, tails_loc)))
@@ -335,7 +348,8 @@ def generate_pcst_subgraphs(
                     continue
                 if wid not in results:
                     results[wid] = pcst_subg
-                results[wid] = pcst_subg
+                elif wid in results and results[wid].num_nodes < pcst_subg.num_nodes:
+                    results[wid] = pcst_subg
         else:
             results[wid] = None
             
@@ -549,7 +563,7 @@ if __name__ == '__main__':
         with open(output_path, 'wb') as f:
             pickle.dump(pcst_dict, f)
         print(f"PCST subgraph dict saved to {output_path}")
-    print(f"Total entities: {len(wikidata_ids)}, Subgraphs generated: {sum(v is not None for v in results.values())}")
+    print(f"Total entities: {len(wikidata_ids)}, Subgraphs generated: {sum(v is not None for v in pcst_dict.values())}")
 
     # Sample 2-hop subgraphs
     output_path = f"entity_2hop_subgraph-{args.dataset}.pkl"
