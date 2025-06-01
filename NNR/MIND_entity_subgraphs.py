@@ -348,7 +348,7 @@ def generate_pcst_subgraphs(
                     continue
                 if wid not in results:
                     results[wid] = pcst_subg
-                elif wid in results and results[wid].num_nodes < pcst_subg.num_nodes:
+                elif results.get(wid) is not None and results[wid].num_nodes < pcst_subg.num_nodes:
                     results[wid] = pcst_subg
         else:
             results[wid] = None
@@ -439,14 +439,20 @@ def generate_news_subgraphs(
     with open('news_ID-%s.json' % dataset, 'r', encoding='utf-8') as news_ID_f:
         news_ID_dict = json.load(news_ID_f)
 
+    cnt_pad = 0
+    cnt_no_entity_in_news = 0
+    cnt_no_qid = 0
+    cnt_no_global_id = 0
     news_subgraph = {}
     for news_id, news_idx in news_ID_dict.items():
         if news_id == '<PAD>':
+            cnt_pad += 1
             news_subgraph[news_idx] = (dummy_graph, dummy_mask)
             continue
 
         qids = link_entity_dic.get(news_id, [])
         if not qids:
+            cnt_no_entity_in_news += 1
             news_subgraph[news_idx] = (dummy_graph, dummy_mask)
             continue
 
@@ -458,12 +464,14 @@ def generate_news_subgraphs(
                 union_globals.update(subg.global_node_idx.tolist())
 
         if not union_globals:
+            cnt_no_qid += 1
             news_subgraph[news_idx] = (dummy_graph, dummy_mask)
             continue
 
         # map to local indices
         subset = [global2local[g] for g in sorted(union_globals) if g in global2local]
         if len(subset) == 0:
+            cnt_no_global_id += 1
             news_subgraph[news_idx] = (dummy_graph, dummy_mask)
             continue
         else:
@@ -488,12 +496,19 @@ def generate_news_subgraphs(
         # create seed mask
         local_idx_map = {g: i for i, g in enumerate(subset.tolist())}
         seed_mask = torch.zeros(subset.size(0), dtype=torch.bool)
-        entity_ids = set(subg.global_node_idx.tolist())
+        entity_ids = union_globals
         valid_ids = entity_ids & local_idx_map.keys()
         for g_id in valid_ids:
             seed_mask[local_idx_map[g_id]] = True
 
         news_subgraph[news_idx] = (sub_data, seed_mask)
+    
+    print(f"Total news IDs: {len(news_ID_dict)}")
+    print(f" - <PAD> news: {cnt_pad}")
+    print(f" - No entities in news: {cnt_no_entity_in_news}")
+    print(f" - No entities in subgraph: {cnt_no_qid}")
+    print(f" - No mapping to local indices: {cnt_no_global_id}")
+    print(f"Total generated news subgraphs: {len(news_subgraph)}")
 
     return news_subgraph
 
@@ -595,8 +610,8 @@ if __name__ == '__main__':
             pickle.dump(news_subgraphs, f)
         print(f"News subgraph dict saved to {output_path}")
     
-    dummy_count = sum(1 for g, _ in news_subgraphs.values() if g.num_nodes == 1 and g.edge_index.numel() == 0)
-    print(f"Dummy news subgraphs: {dummy_count}/{len(news_subgraphs)}")
+    single_component_cnt = sum(1 for g, _ in news_subgraphs.values() if g.num_nodes == 1 and g.edge_index.numel() == 0)
+    print(f"Single component news subgraphs: {single_component_cnt}/{len(news_subgraphs)}")
 
     # Print summary for first 20 entity subgraphs
     print(f"Total news subgraphs: {len(news_subgraphs)}")
