@@ -4,12 +4,9 @@ import pickle
 import json
 import csv
 
-import torch
-
 import pandas as pd
 import numpy as np
-
-from collections import defaultdict
+import torch
 from torch_geometric.data import Data
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.utils import subgraph
@@ -148,7 +145,7 @@ def generate_induced_subgraph(
     heads_loc = np.searchsorted(all_nodes, heads)
     tails_loc = np.searchsorted(all_nodes, tails)
 
-    # 노드 피처: MIND 임베딩으로 대체 (default: 0, missing은 이후 보정)
+    # 노드 피처: MIND 임베딩으로 대체
     default_emb = np.zeros((100,), dtype=np.float32)
     qids = [idx2ent[nid] for nid in all_nodes]
     node_feats = np.stack(
@@ -169,36 +166,6 @@ def generate_induced_subgraph(
 
     print(f"Total nodes: {all_nodes.size}, Total edges: {len(original_edge_idx)}")
     print(f"Missing nodes: {missing_nodes}, Missing edges: {missing_edges}")
-
-    # Missing node embedding 보정: 1-hop 이웃 평균
-    neighbors = defaultdict(list)
-    for h_l, t_l in zip(heads_loc, tails_loc):
-        neighbors[h_l].append(t_l)
-        neighbors[t_l].append(h_l)
-
-    missing_nodes = 0
-    for i in range(x_sub.shape[0]):
-        if torch.all(x_sub[i] == 0):
-            neighs = neighbors[i]
-            valid_neighs = [x_sub[j] for j in neighs if not torch.all(x_sub[j] == 0)]
-            if valid_neighs:
-                x_sub[i] = torch.stack(valid_neighs).mean(dim=0)
-            else:
-                missing_nodes += 1
-
-    # Missing edge embedding 보정: 연결된 노드 평균
-    missing_edges = 0
-    for i in range(ea_sub.shape[0]):
-        if torch.all(ea_sub[i] == 0):
-            h_l = heads_loc[i]
-            t_l = tails_loc[i]
-            ea_sub[i] = (x_sub[h_l] + x_sub[t_l]) / 2
-            if torch.all(ea_sub[i] == 0):  # 여전히 0이면 missing
-                missing_edges += 1
-
-    print(f"Total nodes: {all_nodes.size}, Total edges: {len(original_edge_idx)}")
-    print(f"Remaining missing nodes (no neighbor info): {missing_nodes}")
-    print(f"Remaining missing edges (nodes also missing): {missing_edges}")
 
     # 엣지 인덱스
     ei_sub = torch.from_numpy(np.vstack((heads_loc, tails_loc)))
@@ -248,8 +215,8 @@ def retrieval_via_pcst(graph, q_emb, root, topk=3, topk_e=3, cost_e=0.5, pruning
     else:
         e_prizes = torch.zeros(graph.edge_index.size(1))
 
-    costs = []
     edges = []
+    costs = []
     virtual_n_prizes = []
     virtual_edges = []
     virtual_costs = []
@@ -347,8 +314,6 @@ def generate_pcst_subgraphs(
                 if wid is None:
                     continue
                 if wid not in results:
-                    results[wid] = pcst_subg
-                elif results.get(wid) is not None and results[wid].num_nodes < pcst_subg.num_nodes:
                     results[wid] = pcst_subg
         else:
             results[wid] = None
