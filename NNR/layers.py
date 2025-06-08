@@ -9,13 +9,16 @@ class GAT(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout, num_heads):
         super(GAT, self).__init__()
         self.convs = torch.nn.ModuleList()
-        self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, concat=False))
         self.bns = torch.nn.ModuleList()
-        self.bns.append(torch.nn.BatchNorm1d(hidden_channels))
+
+        self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, concat=True))
+        cur_channels = hidden_channels * num_heads
+        self.bns.append(torch.nn.BatchNorm1d(cur_channels))
         for _ in range(num_layers - 2):
-            self.convs.append(GATConv(hidden_channels, hidden_channels, heads=num_heads, concat=False))
-            self.bns.append(torch.nn.BatchNorm1d(hidden_channels))
-        self.convs.append(GATConv(hidden_channels, out_channels, heads=num_heads, concat=False))
+            self.convs.append(GATConv(cur_channels, hidden_channels, heads=num_heads, concat=True))
+            cur_channels = hidden_channels * num_heads
+            self.bns.append(torch.nn.BatchNorm1d(cur_channels))
+        self.convs.append(GATConv(cur_channels, out_channels, heads=num_heads, concat=False))
         self.dropout = dropout
 
     def reset_parameters(self):

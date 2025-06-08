@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ENV_NAME="LKPNR_CPU"
-dataset="small"
+dataset="200k"
 
 eval "$(conda shell.bash hook)"
 
@@ -16,4 +16,4 @@ rm -rf ./output.log
 
 cd ./NNR
 
-nohup python -u MIND_entity_subgraphs.py 2>&1 | tee ../output.log &
+nohup python -u MIND_entity_subgraphs.py --dataset=$dataset 2>&1 | tee ../output.log &

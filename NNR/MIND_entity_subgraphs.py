@@ -408,7 +408,7 @@ def generate_news_subgraphs(
     cnt_no_entity_in_news = 0
     cnt_no_qid = 0
     cnt_no_global_id = 0
-    news_subgraph = {}
+    news_subgraph = [tuple() for _ in range(len(news_ID_dict))]
     for news_id, news_idx in news_ID_dict.items():
         if news_id == '<PAD>':
             cnt_pad += 1
@@ -462,7 +462,7 @@ def generate_news_subgraphs(
         local_idx_map = {g: i for i, g in enumerate(subset.tolist())}
         seed_mask = torch.zeros(subset.size(0), dtype=torch.bool)
         entity_ids = union_globals
-        valid_ids = entity_ids & local_idx_map.keys()
+        valid_ids = entity_ids & set(local_idx_map.keys())
         for g_id in valid_ids:
             seed_mask[local_idx_map[g_id]] = True
 
@@ -490,8 +490,8 @@ if __name__ == '__main__':
     rel2idx, idx2rel    = load_wikikg_rel_map()
     wikidata_ids        = parse_entities_from_tsv(f'../dataset/mind_{args.dataset}_merged/news.tsv')
     linked_entities     = load_linked_entity_map()
-    entity_embeddings   = parse_entity_emb_vec(f'../dataset/mind_{args.dataset}_merged/entity_embedding.vec')
-    rel_embeddings      = parse_rel_emb_vec(f'../dataset/mind_{args.dataset}_merged/relation_embedding.vec')
+    entity_embeddings   = parse_entity_emb_vec(f'../dataset/mind_large_merged/entity_embedding.vec')
+    rel_embeddings      = parse_rel_emb_vec(f'../dataset/mind_large_merged/relation_embedding.vec')
 
     if os.path.exists(f'entity_mapping-{args.dataset}.pkl') and os.path.exists(f'induced_subgraph-{args.dataset}.pt'):
         print(f"induced_subgraph-{args.dataset}.pt already exists, loading...")
@@ -575,18 +575,18 @@ if __name__ == '__main__':
             pickle.dump(news_subgraphs, f)
         print(f"News subgraph dict saved to {output_path}")
     
-    single_component_cnt = sum(1 for g, _ in news_subgraphs.values() if g.num_nodes == 1 and g.edge_index.numel() == 0)
+    single_component_cnt = sum(1 for g, _ in news_subgraphs if g.num_nodes == 1 and g.edge_index.numel() == 0)
     print(f"Single component news subgraphs: {single_component_cnt}/{len(news_subgraphs)}")
 
     # Print summary for first 20 entity subgraphs
     print(f"Total news subgraphs: {len(news_subgraphs)}")
 
-    num_nodes_list = [sub.num_nodes if sub is not None else 0 for sub, _ in news_subgraphs.values()]
+    num_nodes_list = [sub.num_nodes if sub is not None else 0 for sub, _ in news_subgraphs]
     print(f"Max num_nodes: {max(num_nodes_list)}")
     print(f"Min num_nodes: {min(num_nodes_list)}")
     print(f"Avg num_nodes: {np.mean(num_nodes_list)}")
 
-    edge_counts = [sub.edge_index.size(1) if sub is not None else 0 for sub, _ in news_subgraphs.values()]
+    edge_counts = [sub.edge_index.size(1) if sub is not None else 0 for sub, _ in news_subgraphs]
     print(f"Max num_edges: {max(edge_counts)}")
     print(f"Min num_edges: {min(edge_counts)}")
     print(f"Avg num_edges: {np.mean(edge_counts)}")

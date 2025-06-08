@@ -46,9 +46,9 @@ class Config:
         parser.add_argument('--early_stopping_epoch', type=int, default=3, help='Epochs to stop training if dev result does not improve')
         # Model config
         parser.add_argument('--gat_in_dim', type=int, default=100, help='Graph entity embedding dimension')
-        parser.add_argument('--gat_hidden_dim', type=int, default=100, help='Graph entity hidden dimension')
-        parser.add_argument('--gat_out_dim', type=int, default=100, help='Graph attention output dimension')
-        parser.add_argument('--gat_head_num', type=int, default=2, help='Graph attention head number')
+        parser.add_argument('--gat_hidden_dim', type=int, default=50, help='Graph entity hidden dimension')
+        parser.add_argument('--gat_out_dim', type=int, default=200, help='Graph attention output dimension')
+        parser.add_argument('--gat_head_num', type=int, default=4, help='Graph attention head number')
         parser.add_argument('--gat_dropout', type=float, default=0.2, help='Graph attention dropout rate')
         parser.add_argument('--gat_mlp_out_dim', type=int, default=400, help='Graph attention MLP output dimension')
         parser.add_argument('--gat_mlp_dropout', type=float, default=0.2, help='Graph attention MLP dropout rate')

@@ -132,7 +132,7 @@ class Trainer:
             model.train()
             epoch_loss = 0
 
-            for batch in (train_dataloader):
+            for batch in tqdm(train_dataloader):
                 # 1) unpack collate_fn’s return:
                 #    (*all_the_normal_tensors,
                 #     history_batch, history_sizes)

@@ -17,7 +17,8 @@ class BaseMINDDataset(data.Dataset):
     _global_pretrain_emb = None
     _global_linked_entity_emb = None
     _global_linked_entity_mask = None
-    _global_news_subgraph = None
+    _global_news_subgraphs = None
+    _global_news_subgraph_masks = None
 
     def __init__(self, corpus: MIND_Corpus, config: Config, mode: str):
         assert mode in ['train', 'dev', 'test'], "mode must be 'train', 'dev', or 'test'"
@@ -108,14 +109,15 @@ class BaseMINDDataset(data.Dataset):
         self.linked_entity_mask = BaseMINDDataset._global_linked_entity_mask
     
     def _load_news_subgraph(self, config: Config):
-        if BaseMINDDataset._global_news_subgraph is None:
-            pkl_path = f'news_subgraph-{config.dataset}.pkl'
-            if not os.path.exists(pkl_path):
-                raise FileNotFoundError(f"{pkl_path} 이(가) 없습니다. 먼저 서브그래프 생성 스크립트로 파일을 만들어 주세요.")
-            with open(pkl_path, 'rb') as f:
-                BaseMINDDataset._global_news_subgraph = pickle.load(f)
+        if BaseMINDDataset._global_news_subgraphs is None:
+            with open(f'news_subgraph-{config.dataset}.pkl', 'rb') as f:
+                graphs, masks = zip(*pickle.load(f))
 
-        self.news_subgraph = BaseMINDDataset._global_news_subgraph
+            BaseMINDDataset._global_news_subgraphs = graphs
+            BaseMINDDataset._global_news_subgraph_masks = masks
+        
+        self.news_subgraphs = BaseMINDDataset._global_news_subgraphs
+        self.news_subgraph_masks = BaseMINDDataset._global_news_subgraph_masks
 
     def __len__(self):
         return self.num
@@ -154,8 +156,10 @@ class MIND_Train_Dataset(BaseMINDDataset):
         cand_ent_emb = self.linked_entity_emb[sample_idx]
         cand_ent_mask = self.linked_entity_mask[sample_idx]
 
-        history_graphs, history_seed_masks = zip(*map(self.news_subgraph.__getitem__, history_idx.tolist()))
-        cand_graphs, cand_seed_masks = zip(*map(self.news_subgraph.__getitem__, sample_idx.tolist()))
+        history_graphs = [self.news_subgraphs[i] for i in history_idx.tolist()]
+        history_seed_masks = [self.news_subgraph_masks[i] for i in history_idx.tolist()]
+        cand_graphs = [self.news_subgraphs[i] for i in sample_idx.tolist()]
+        cand_seed_masks = [self.news_subgraph_masks[i] for i in sample_idx.tolist()]
 
         return (
             behavior[0],  # user ID
@@ -203,10 +207,10 @@ class MIND_DevTest_Dataset(BaseMINDDataset):
         cand_ent_emb = self.linked_entity_emb[cand_news_idx]
         cand_ent_mask = self.linked_entity_mask[cand_news_idx]
 
-        history_graphs, history_seed_masks = zip(*map(self.news_subgraph.__getitem__, history_idx.tolist()))
-        sub_data, seed_mask = self.news_subgraph[cand_news_idx.item()]
-        cand_graphs = [sub_data]
-        cand_seed_masks = [seed_mask]
+        history_graphs = [self.news_subgraphs[i] for i in history_idx.tolist()]
+        history_seed_masks = [self.news_subgraph_masks[i] for i in history_idx.tolist()]
+        cand_graphs = [self.news_subgraphs[cand_news_idx.item()]]
+        cand_seed_masks = [self.news_subgraph_masks[cand_news_idx.item()]]
 
         return (
             behavior[0],  # user ID

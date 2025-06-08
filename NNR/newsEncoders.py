@@ -82,15 +82,15 @@ class MHSA(NewsEncoder):
         self.denseHead3 = nn.Linear(config.pretrain_rep_d, config.entity_embedding_dim, bias=True)
 
         self.gat_num_layers = 2
-        self.gat_num_heads = config.gat_head_num  # 2
+        self.gat_num_heads = config.gat_head_num  # 4
         self.gat_dropout = config.gat_dropout  # 0.2
 
         self.gat_in_channels = config.gat_in_dim  # 100
-        self.gat_hidden_channels = config.gat_hidden_dim  # 100
-        self.gat_out_channels = config.gat_out_dim  # 100
+        self.gat_hidden_channels = config.gat_hidden_dim  # 50
+        self.gat_out_channels = config.gat_out_dim  # 200
         
-        self.mlp_in_dim = self.gat_out_channels # 100
-        self.mlp_out_dim = config.gat_mlp_out_dim  # 100
+        self.mlp_in_dim = self.gat_out_channels  # 200
+        self.mlp_out_dim = self.mlp_in_dim  # 200
         self.mlp_dropout = config.gat_mlp_dropout  # 0.2
         # KG embedding via GAT
         self.gat = GAT(
@@ -186,34 +186,20 @@ class MHSA(NewsEncoder):
         node_emb, _ = self.gat(x, edge_index, edge_attr)
         batch_idx = news_subgraph_batch.batch
 
-        masked_node_emb = node_emb[news_subgraph_entity_mask]
-        masked_batch_idx = batch_idx[news_subgraph_entity_mask]
+        # node_emb: 배치 내 뉴스 서브그래프의 모든 노드들에 대한 임베딩
+        # batch_idx: 배치 내 존재하는 노드가 속한 뉴스의 인덱스
+        # masked_node_emb: 배치 내 뉴스 서브그래프에서 실제 뉴스에서 등장하는 노드들만 포함
+        # masked_batch_idx: masked_node_emb에 해당하는 노드가 속한 뉴스의 인덱스
+        masked_node_emb = node_emb[news_subgraph_entity_mask] # [masked_batch_size, feature_dim]
+        masked_batch_idx = batch_idx[news_subgraph_entity_mask] # [masked_batch_size]
 
         batch_news_num = title_text.size(0) * title_text.size(1)
         feature_dim = node_emb.size(1)
 
-        if masked_node_emb.size(0) > 0:
-            # 1. 노드별 mean pooling (정규화 전 raw sum)
-            pooled_sum = torch.zeros(batch_news_num, feature_dim, dtype=node_emb.dtype, device=node_emb.device)
-            pooled_count = torch.zeros(batch_news_num, 1, dtype=node_emb.dtype, device=node_emb.device)
-
-            # sum
-            pooled_sum.scatter_add_(
-                0,
-                masked_batch_idx.unsqueeze(1).expand(-1, feature_dim),
-                masked_node_emb
-            )
-            # count
-            ones = torch.ones(masked_node_emb.size(0), 1, dtype=node_emb.dtype, device=node_emb.device)
-            pooled_count.scatter_add_(
-                0,
-                masked_batch_idx.unsqueeze(1),
-                ones
-            )
-            # mean
-            pooled = pooled_sum / (pooled_count + 1e-6)  # avoid division by zero
-        else:
-            pooled = torch.zeros((batch_news_num, feature_dim), dtype=node_emb.dtype, device=node_emb.device)
+        # # 각 뉴스 서브그래프 내에 seed node들에 대한 임베딩만 평균
+        # pooled = global_mean_pool(masked_node_emb, masked_batch_idx, size=batch_news_num) # [batch_news_num, mean_pooled_feature_dim]
+        # 각 뉴스에 대한 서브그래프 내의 모든 노드 임베딩의 평균 -> shape: [batch_news_num, mean_pooled_feature_dim]
+        pooled = global_mean_pool(node_emb, batch_idx, size=batch_news_num) # [batch_news_num, mean_pooled_feature_dim]
 
         gat_rep = self.gat_mlp(pooled)
         gat_rep = gat_rep.view(batch_size, news_num, -1)

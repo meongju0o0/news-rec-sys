@@ -75,7 +75,7 @@ def compute_scores(model: nn.Module,
 
     model.eval()
     with torch.no_grad():
-        for batch in (dataloader):
+        for batch in tqdm(dataloader):
             # unpack
             *tensor_fields, hist_batch, hist_seed_mask, cand_batch, cand_seed_mask = batch
 
